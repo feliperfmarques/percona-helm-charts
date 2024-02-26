@@ -1,0 +1,183 @@
+{{- if .Values.enabledHA }}
+{{- $root := . -}}
+{{- $replicas := (atoi (quote $root.Values.replicas) | default 3) -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $serviceNames := list }}
+{{- range $i,$e := until $replicas }}
+{{- $serviceName := ternary (printf "%s-active" $root.Values.service.name) (printf "%s-passive-%d" $root.Values.service.name $i) (eq $i 0) -}}
+{{- $serviceNames = append $serviceNames $serviceName }}
+{{- end }}
+{{- range $serviceName := $serviceNames }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pmm.fullname" $root }}
+  labels:
+    {{- include "pmm.labels" $root | nindent 4 }}
+spec:
+  serviceName: {{ $serviceName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "pmm.selectorLabels" $root | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        {{- include "pmm.podAnnotations" $root | nindent 8 }}
+      labels:
+        {{- include "pmm.selectorLabels" $root | nindent 8 }}
+    spec:
+      {{- with $root.Values.image.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml $root | nindent 8 }}
+      {{- end }}
+      {{- if $root.Values.serviceAccount.create }}
+      serviceAccountName: {{ include "pmm.serviceAccountName" $root }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml $root | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity:
+        {{- toYaml $root | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations:
+        {{- toYaml $root | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $root.Chart.Name }}
+          
+          image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          {{- if $root.Values.pmmResources }}
+          resources:
+            {{- toYaml $root.Values.pmmResources | nindent 12 }}
+          {{- end }}
+
+          # environment passed to PMM, defined in configMap
+          envFrom:
+            - configMapRef:
+                name: {{ include "pmm.fullname" $root }}
+                optional: true
+
+          # additional secrets that could be used for Grafana iDP 
+          env:
+            - name: PMM_TEST_HA_ENABLE
+              value: "1"
+            - name: PMM_TEST_HA_BOOTSTRAP
+              value: {{ ternary 1 0 (contains "active" $serviceName) | quote}}
+            - name: PMM_TEST_HA_NODE_ID
+              value: {{ $serviceName | quote }}
+            - name: PMM_TEST_HA_ADVERTISE_ADDRESS
+              value: {{ printf "%s.%s" $serviceName $namespace | quote }}
+            - name: PMM_TEST_HA_GOSSIP_PORT
+              value: "9096"
+            - name: PMM_TEST_HA_RAFT_PORT
+              value: "9097"
+            - name: PMM_TEST_HA_GRAFANA_GOSSIP_PORT
+              value: "9094"
+            - name: PMM_TEST_HA_PEERS
+              value: {{ printf "%s.%s" (join (printf ".%s," $namespace) $serviceNames) ($namespace) | quote }}            
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.secret.name }}
+                  key: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+                  optional: true
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.secret.name }}
+                  key: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+                  optional: true
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.secret.name }}
+                  key: PMM_ADMIN_PASSWORD
+                  optional: true
+            - name: PMM_INSTALL_METHOD
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['app.kubernetes.io/managed-by']
+          ports:
+            - name: http
+              containerPort: 80
+            - name: https
+              containerPort: 443
+            - name: pmm_grafana_ha_gossip_port
+              containerPort: 9094
+            - name: pmm_ha_gossip_port
+              containerPort: 9096
+            - name: pmm_ha_raft_port
+              containerPort: 9097
+          readinessProbe:
+            httpGet:
+              path: /v1/readyz
+              port: http
+          {{- if $root.Values.readyProbeConf }} 
+            {{- toYaml $root.Values.readyProbeConf | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: {{ $root.Values.storage.name }}
+              mountPath: /srv
+            - name: annotations
+              mountPath: "/var/run/pmm/annotations"
+              readOnly: true
+            {{- if $root.Values.certs.name }}
+            - name: {{ $root.Values.certs.name }}
+              mountPath: /srv/nginx
+              readOnly: true
+            {{- end }}
+            {{- if $root.Values.extraVolumeMounts }}
+            {{- toYaml $root.Values.extraVolumeMounts | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: annotations
+          projected:
+            sources:
+            - downwardAPI:
+                items:
+                  - path: "annotations"
+                    fieldRef:
+                      fieldPath: metadata.annotations
+      {{- if $root.Values.certs.name }}
+        - name: {{ $root.Values.certs.name }}
+          secret:
+            secretName: {{ $root.Values.certs.name }}
+            optional: false
+      {{- end }}
+      {{- if $root.Values.extraVolumes }}
+        {{- toYaml $root.Values.extraVolumes | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: {{ $root.Values.storage.name }}
+      spec:
+        {{- if $root.Values.storage.selector }}
+        selector:
+          {{- toYaml $root.Values.storage.selector | nindent 10 }}
+        {{- end }}
+        {{ if $root.Values.storage.storageClassName }}
+        storageClassName: {{ $root.Values.storage.storageClassName }}
+        {{ end }}
+        {{- if $root.Values.storage.dataSource }}
+        dataSource:
+          {{- toYaml $root.Values.storage.dataSource | nindent 10 }}
+        {{- end }}
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ $root.Values.storage.size }}
+{{- end }}
+{{- end }}

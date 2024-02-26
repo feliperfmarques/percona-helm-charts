@@ -1,3 +1,4 @@
+{{- if not .Values.enabledHA}}
 {{- $serviceType := .Values.service.type -}}
 apiVersion: v1
 kind: Service
@@ -46,4 +47,5 @@ spec:
   selector:
     {{- include "pmm.selectorLabels" . | nindent 4 }}
 ---
+{{- end }}
 {{- end }}

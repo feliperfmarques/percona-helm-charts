@@ -1,0 +1,61 @@
+{{- if .Values.enabledHA }}
+{{- $root := . -}}
+{{- $serviceType := $root.Values.service.type -}}
+{{- $replicas := (atoi (quote $root.Values.replicas) | default 3) -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $serviceNames := list }}
+{{- range $i,$e := until $replicas }}
+{{- $serviceName := ternary (printf "%s-active" $root.Values.service.name) (printf "%s-passive-%d" $root.Values.service.name $i) (eq $i 0) -}}
+{{- $serviceNames = append $serviceNames $serviceName }}
+{{- end }}
+{{- range $serviceName := $serviceNames }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $serviceName }}
+  labels:
+    {{- include "pmm.labels" $root | nindent 4 }}
+  {{- with $root.Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+  {{- with $root.Values.service.finalizers }}
+  finalizers:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+spec:
+  type: {{ $serviceType | default "ClusterIP" }}
+  {{- with $root.Values.service.ports }}
+  ports:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+  selector:
+    {{- include "pmm.selectorLabels" $root | nindent 4 }}
+{{- if $root.Values.ingress.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $root.Values.service.name }}-grpc
+  labels:
+    {{- include "pmm.labels" $root | nindent 4 }}
+  {{- with $root.Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+  {{- with $root.Values.service.finalizers }}
+  finalizers:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+spec:
+  type: {{ $serviceType | default "ClusterIP" }}
+  {{- with $root.Values.service.ports }}
+  ports:
+    {{- toYaml . | nindent 8 }}
+  {{- end }}
+  selector:
+    {{- include "pmm.selectorLabels" $root | nindent 4 }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

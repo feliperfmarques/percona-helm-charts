@@ -17,6 +17,9 @@ image:
   tag: "2.41.1"
   imagePullSecrets: []
 
+enabledHA: true
+replicas: 3
+
 ## PMM environment variables
 ## ref: https://docs.percona.com/percona-monitoring-and-management/setting-up/server/docker.html#environment-variables
 ##
@@ -31,6 +34,8 @@ pmmEnv:
 #  GF_AUTH_GENERIC_OAUTH_TOKEN_URL: ''
 #  GF_AUTH_GENERIC_OAUTH_API_URL: ''
 #  GF_AUTH_GENERIC_OAUTH_ALLOWED_DOMAINS: ''
+
+replicas: 3
 
 ## @param pmmResources optional [Resources](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/) requested for [PMM container](https://docs.percona.com/percona-monitoring-and-management/setting-up/server/index.html#set-up-pmm-server)
     ##  pmmResources:
@@ -95,7 +100,7 @@ certs: {}
 service:
   ## @param service.name Service name that is dns name monitoring services would send data to. `monitoring-service` used by default by pmm-client in Percona operators.
   ##
-  name: monitoring-service
+  name: pmm
   ## @param service.type Kubernetes Service type
   ##
   type: NodePort
@@ -119,7 +124,28 @@ service:
       protocol: TCP
       ## @param service.ports[1].name port name
       name: http
-
+    ## @param service.ports[1].port http port number
+    - port: 9094
+      ## @param service.ports[1].targetPort target port to map for statefulset and ingress
+      targetPort: pmm_grafana_ha_gossip_port
+      ## @param service.ports[1].protocol protocol for UDP
+      protocol: UDP
+      ## @param service.ports[1].name port name
+      name: pmm_grafana_ha_gossip_port
+    - port: 9096
+      ## @param service.ports[1].targetPort target port to map for statefulset and ingress
+      targetPort: pmm_ha_gossip_port
+      ## @param service.ports[1].protocol protocol for UDP
+      protocol: UDP
+      ## @param service.ports[1].name port name
+      name: pmm_ha_gossip_port
+    - port: 9097
+      ## @param service.ports[1].targetPort target port to map for statefulset and ingress
+      targetPort: pmm_ha_raft_port
+      ## @param service.ports[1].protocol protocol for TCP
+      protocol: TCP
+      ## @param service.ports[1].name port name
+      name: pmm_ha_raft_port
 ## Ingress controller configuration
 ##
 ingress:
